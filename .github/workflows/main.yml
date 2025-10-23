@@ -20,13 +20,16 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          USERNAME="ahmed"   # ← غيّر هذا الاسم كما تريد
+          USERNAME="ahmed"  # ← غيّر إلى اسم المستخدم الذي تريده
+          
           if id "$USERNAME" &>/dev/null; then
-            echo "$USERNAME exists"
+            echo "$USERNAME exists, skipping creation."
           else
             sudo useradd -m -s /bin/bash "$USERNAME"
+            echo "$USERNAME:${RDP_PASSWORD}" | sudo chpasswd
           fi
-          echo "${USERNAME}:${RDP_PASSWORD}" | sudo chpasswd
+
+          sudo mkdir -p /home/${USERNAME}/.config
           echo "lxsession -s LXDE -e LXDE" | sudo tee /home/${USERNAME}/.xsession > /dev/null
           sudo chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
 
@@ -78,8 +81,8 @@ jobs:
           echo "=============================================="
           echo "✅ RDP is running with LXDE Desktop"
           echo ""
-          echo "🔹 Username: ahmed"     # ← غيّر هنا نفس الاسم
-          echo "🔹 Password: (your RDP_PASSWORD secret)"
+          echo "🔹 Username: ahmed"     # ← نفس اسم المستخدم أعلاه
+          echo "🔹 Password: (from RDP_PASSWORD secret)"
           echo ""
           echo "You can connect via:"
           echo "  - Tailscale IP (from output above)"
