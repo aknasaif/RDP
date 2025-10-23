@@ -1,0 +1,94 @@
+name: Ephemeral RDP via Tailscale (GitHub Actions)
+
+# تشغيل يدوي من واجهة GitHub
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # عدل المدة حسب حاجتك (الحد الأقصى عادة 360)
+    steps:
+
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Update & install base packages
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y curl gnupg2 ca-certificates lsb-release apt-transport-https software-properties-common
+
+      - name: Install desktop environment and xrdp
+        run: |
+          # تثبيت XFCE (خفيف نسبيًا) و xrdp
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xorg dbus-x11 x11-xserver-utils
+          sudo apt-get install -y xrdp
+          # تأكد من أن xrdp يستخدم xfce
+          sudo mkdir -p /etc/xrdp
+          echo "startxfce4" | sudo tee /etc/xrdp/startwm.sh > /dev/null
+          sudo chmod +x /etc/xrdp/startwm.sh
+
+      - name: Install Tailscale
+        run: |
+          # إضافة مفتاح ومستودع Tailscale
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo apt-key add -
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update -y
+          sudo apt-get install -y tailscale
+
+      - name: Start tailscaled (userspace networking) and authenticate
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          # تشغيل tailscaled في خلفية باستخدام userspace networking (يتفادى بعض مشاكل systemd في runners)
+          sudo tailscaled --tun=userspace-networking --socks5-server=localhost:1055 -state=/tmp/tailscaled.state &
+          sleep 2
+          # رفع الجهاز والانضمام باستخدام المفتاح
+          sudo tailscale up --authkey="${TAILSCALE_AUTHKEY}" --hostname="gh-actions-rdp-$(date +%s)" --accept-routes=false || true
+          sleep 3
+          echo "Tailscale status:"
+          sudo tailscale status || true
+          echo "Tailscale IPv4 addresses:"
+          sudo tailscale ip -4 || true
+
+      - name: Create RDP user and set password
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          # أنشئ المستخدم إن لم يكن موجودًا ثم عيّن كلمة المرور
+          if id "rdpuser" &>/dev/null; then
+            echo "rdpuser exists"
+          else
+            sudo useradd -m -s /bin/bash rdpuser
+          fi
+          echo "rdpuser:${RDP_PASSWORD}" | sudo chpasswd
+          # تأكد من أن المستخدم يستطيع الدخول بجلسة xfce
+          sudo mkdir -p /home/rdpuser/.config
+          echo "startxfce4" | sudo tee /home/rdpuser/.xsession > /dev/null
+          sudo chown -R rdpuser:rdpuser /home/rdpuser
+
+      - name: Enable & restart xrdp
+        run: |
+          sudo systemctl enable xrdp || true
+          sudo systemctl restart xrdp || true
+          # إظهار حالة xrdp
+          sudo ss -tunlp | grep xrdp || true
+
+      - name: Show connection info
+        run: |
+          echo "----------------------------------------"
+          echo "RDP user: rdpuser"
+          echo "RDP port: 3389"
+          echo ""
+          echo "Tailscale IPv4 addresses for this runner (use one of these in your RDP client):"
+          sudo tailscale ip -4 || true
+          echo ""
+          echo "If MagicDNS is enabled you may also be able to connect by hostname (check your Tailscale admin panel)."
+          echo "Remember: this runner session is ephemeral — it will end when the job finishes or times out."
+          echo "----------------------------------------"
+
+      - name: Keep runner alive for manual testing (optional)
+        run: |
+          # قم بتعديل مدة النوم أو أزل هذه الخطوة حسب حاجتك.
+          echo "Keeping runner alive for 2 hours for testing..."
+          sleep 7200
